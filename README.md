@@ -16,20 +16,7 @@ Lightweight Strawberry GraphQL server that exposes a single `ask` query. The res
 
    ```bash
    cp env.sample .env  # includes a localhost alpha MCP
-   # or export manually:
-   export MCP_SERVERS='[
-      {
-        "name": "alpha-agent",
-        "base_url": "http://localhost:3000",
-        "discover_path": "/mcp/discover",
-        "invoke_path": "/mcp/invoke",
-        "keywords": ["alpha", "portfolio"]
-      }
-    ]'
-    export API_AUTH_TOKEN=your-token
-    export OPENAI_API_KEY=your-openai-key
-    export OPENAI_MODEL=gpt-4o-mini
-    ```
+  ```
 
 3. Start the GraphQL server:
 

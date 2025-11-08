@@ -1,5 +1,5 @@
-"""GraphQL agent package."""
+__version__ = "0.0.0"
 
 from .schema import schema
 
-__all__ = ["schema"]
+__all__ = ["__version__", "schema"]

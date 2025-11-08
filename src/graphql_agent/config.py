@@ -1,5 +1,3 @@
-"""Application configuration and settings management."""
-
 from __future__ import annotations
 
 import json
@@ -11,27 +9,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class MCPServerSettings(BaseModel):
-    """Configuration describing an MCP server and its schema."""
-
     name: str
     base_url: HttpUrl
-    description: str | None = Field(
-        default=None,
-        description="Human-readable summary of the server's capabilities",
-    )
-    discover_path: str = Field(
-        default="/mcp/discover",
-        description="JSON-RPC 2.0 endpoint path for discovery",
-    )
-    invoke_path: str = Field(
-        default="/mcp/invoke",
-        description="JSON-RPC 2.0 endpoint path for prompt invocation",
-    )
 
 
 class Settings(BaseSettings):
-    """Environment-driven configuration for the GraphQL agent."""
-
+    application_name: str = Field(
+        default="agentic_subgraph", alias="APPLICATION_NAME", description="Name of your application"
+    )
     api_auth_token: str | None = Field(
         default=None,
         description="Bearer token or API key added to downstream requests when present",
@@ -40,11 +25,6 @@ class Settings(BaseSettings):
         default_factory=list,
         description="List of MCP servers to consider for prompt routing",
         alias="MCP_SERVERS",
-    )
-    log_level: str = Field(
-        default="INFO",
-        description="Root logger level",
-        alias="LOG_LEVEL",
     )
     openai_api_key: str | None = Field(
         default=None,
@@ -87,9 +67,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return cached settings instance.
-
-    Using LRU caching keeps a single settings object per process.
-    """
-
-    return Settings()  # type: ignore[call-arg]
+    return Settings()

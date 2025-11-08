@@ -1,101 +1,109 @@
-"""Thin client for a Model Context Protocol server (JSON-RPC 2.0)."""
-
 from __future__ import annotations
 
-import itertools
-import logging
-from collections.abc import Mapping
-from typing import Any
+from typing import Any, overload
 
 import httpx
 
-from .base import JSONServiceClient
+from graphql_agent.types.mcp_2025_08_16 import (
+    CallToolRequest,
+    CallToolResponse,
+    InitializeRequest,
+    InitializeResponse,
+    ListToolsRequest,
+    ListToolsResponse,
+    make_call_tool_request,
+    make_initialize_request,
+    make_list_tools_request,
+)
 
-LOGGER = logging.getLogger(__name__)
+from .base import JSONServiceClient
 
 
 class MCPClient(JSONServiceClient):
-    """Delegate prompts to an MCP server via JSON-RPC 2.0."""
-
-    _id_counter = itertools.count(1)
+    @overload
+    async def _rpc_call(
+        self, request_object: InitializeRequest, headers: dict[str, Any]
+    ) -> InitializeResponse: ...
+    @overload
+    async def _rpc_call(
+        self, request_object: ListToolsRequest, headers: dict[str, Any]
+    ) -> ListToolsResponse: ...
+    @overload
+    async def _rpc_call(
+        self, request_object: CallToolRequest, headers: dict[str, Any]
+    ) -> CallToolResponse: ...
 
     async def _rpc_call(
-        self, path: str, method: str, params: Mapping[str, Any] | None = None
-    ) -> Any:
-        request_id = next(self._id_counter)
-        LOGGER.debug("RPC request %s %s id=%s", method, path, request_id)
-        request = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-            "params": params or {},
-        }
-        response = await self._client.post(path, json=request, headers=self._headers())
+        self,
+        request_object: InitializeRequest | ListToolsRequest | CallToolRequest,
+        headers: dict[str, Any],
+    ) -> InitializeResponse | ListToolsResponse | CallToolResponse:
+        response = await self._client.post(
+            "/mcp",
+            json=request_object,
+            timeout=httpx.Timeout(10.0, connect=5.0),
+            headers=headers,
+        )
         response.raise_for_status()
-        payload = response.json()
-        LOGGER.debug("RPC response %s id=%s status=%s", method, request_id, response.status_code)
-        if "error" in payload and payload["error"] is not None:
-            LOGGER.error("MCP error for %s id=%s: %s", method, request_id, payload["error"])
+
+        try:
+            payload = response.json()
+        except ValueError as e:
+            raise RuntimeError(f"Invalid JSON from MCP server: {e}") from e
+
+        if payload.get("error"):
             raise RuntimeError(f"MCP error: {payload['error']}")
+
         return payload
 
-    async def discover(self, discover_path: str = "/mcp/discover") -> Any:
-        """Call the discovery method to obtain schema/capabilities."""
-
-        LOGGER.debug("Discovering MCP schema via %s", discover_path)
+    async def initialize(self) -> InitializeResponse:
+        initialize_request = make_initialize_request()
         try:
-            return await self._rpc_call(discover_path, method="discover", params={})
-        except httpx.HTTPStatusError as exc:
-            LOGGER.exception(
-                "Discover RPC failed with status %s;",
-                exc.response.status_code,
+            initialize_response = await self._rpc_call(
+                request_object=initialize_request,
             )
-            return {}
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError("Failed to query MCP server") from exc
 
-    async def handle(
+        response_version = initialize_response.get("result", {}).get("protocolVersion")
+        request_version = initialize_request.get("params", {}).get("protocolVersion")
+        if response_version != request_version:
+            raise RuntimeError(
+                f"Protocol version mismatch. Supported: {request_version}. Got: {response_version}"
+            )
+
+        return initialize_response
+
+    async def list_tools(self) -> ListToolsResponse:
+        request = make_list_tools_request()
+        try:
+            response = await self._rpc_call(
+                request_object=request,
+            )
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError("Failed to fetch tools from the MCP server") from exc
+
+        return response
+
+    async def call_tool(
         self,
-        prompt: str,
-        *,
-        context: Mapping[str, Any] | None = None,
-        invoke_path: str = "/mcp/invoke",
+        user_token: str,
         tool_name: str | None = None,
         arguments: Any = None,
-    ) -> Any:
-        params: dict[str, Any] = {}
-        if tool_name:
-            params["name"] = tool_name
-        if context:
-            params["context"] = {
-                "prompt": prompt,
-            }
-        if arguments:
-            params["arguments"] = arguments
-
-        LOGGER.debug(
-            "Invoking MCP at %s with tool_name=%s context_keys=%s arguments=%d",
-            invoke_path,
-            tool_name,
-            sorted(context.keys()) if context else [],
-            arguments,
+    ) -> CallToolResponse:
+        request = make_call_tool_request(
+            name=tool_name,
+            arguments=arguments,
         )
+
         try:
-            return await self._rpc_call(invoke_path, method="invoke", params=params)
-        except httpx.HTTPStatusError as exc:
-            LOGGER.warning(
-                "Invoke RPC failed with status %s; attempting fallback POST",
-                exc.response.status_code,
+            return await self._rpc_call(
+                request_object=request,
+                headers={
+                    "authorization": user_token,
+                    "x-authorization": user_token,
+                },
             )
-            if exc.response.status_code in {404, 415, 422}:
-                fallback_response = await self._client.post(
-                    invoke_path,
-                    json=params,
-                    headers=self._headers(),
-                )
-                fallback_response.raise_for_status()
-                LOGGER.debug("Fallback invoke succeeded status=%s", fallback_response.status_code)
-                try:
-                    return fallback_response.json()
-                except ValueError as json_exc:  # pragma: no cover
-                    LOGGER.exception("Fallback invoke response not valid JSON")
-                    raise RuntimeError("MCP invoke response was not valid JSON") from json_exc
+
+        except httpx.HTTPStatusError:
             raise
